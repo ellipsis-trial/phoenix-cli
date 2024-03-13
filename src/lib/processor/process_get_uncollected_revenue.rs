@@ -72,10 +72,10 @@ pub async fn process_get_uncollected_revenue(
             )),
         }
     }
-    println!("USDC Bal: {total_usdc}");
-    println!("USDT Bal: {total_usdt}");
-    println!("SOL Bal: {total_sol}");
-    println!("Total Bal (USDC): {total}");
+    println!("USDC: {total_usdc}");
+    println!("USDT: {total_usdt}");
+    println!("SOL: {total_sol}");
+    println!("Total (USDC): {total}");
     Ok(())
 }
 
@@ -83,11 +83,10 @@ async fn get_price(symbol_a: &str, symbol_b: &str) -> anyhow::Result<f32> {
     let body = reqwest::get(format!(
         "https://api.coinbase.com/v2/prices/{symbol_a}-{symbol_b}/spot"
     ))
-    .await?
+    .await.map_err(|_| anyhow!("Failed to get price data, looks like Coinbase is down.."))?
     .json::<HashMap<String, Value>>()
     .await?;
-    //TODO: fail gracefully
-    let price = &body["data"]["amount"].as_str().unwrap();
+    let price = &body["data"]["amount"].as_str().unwrap(); //fails if coinbase changes their format
     price
         .parse::<f32>()
         .map_err(|e| anyhow!("Failed to get price, Error {e}"))
