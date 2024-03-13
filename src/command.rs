@@ -85,4 +85,6 @@ pub enum PhoenixCLICommand {
         market_pubkey: Pubkey,
         trader_to_evict: Option<Pubkey>,
     },
+    /// Retrieves the current uncollected revenue, denominated in USDC, from the mainnet-beta markets.
+    GetUncollectedRevenue,
 }
