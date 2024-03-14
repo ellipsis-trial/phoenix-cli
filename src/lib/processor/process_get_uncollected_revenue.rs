@@ -6,7 +6,7 @@ use phoenix::{
     program::{load_with_dispatch, MarketHeader},
     quantities::WrapperU64,
 };
-use phoenix_sdk::sdk_client::SDKClient;
+use phoenix_sdk::sdk_client::{MarketMetadata, SDKClient};
 use serde_json::Value;
 use solana_sdk::pubkey::Pubkey;
 
@@ -24,7 +24,7 @@ pub async fn process_get_uncollected_revenue(
         .collect::<Vec<String>>()
         .clone();
 
-    let mut sdk = SDKClient::new(&client.payer, network_url).await?;
+    let sdk = SDKClient::new(&client.payer, network_url).await?;
 
     let usdtprice = get_price("USDT", "USDC").await?;
     let solprice = get_price("SOL", "USDC").await?;
@@ -34,42 +34,50 @@ pub async fn process_get_uncollected_revenue(
     let mut total_usdt = 0f32;
     let mut total_sol = 0f32;
     let mut total = 0f32;
-    for market_key in markets {
-        let market_pubkey = &Pubkey::from_str(&market_key)?;
-        sdk.add_market(&market_pubkey).await?;
-        let market_metadata = sdk.get_market_metadata(market_pubkey).await?;
+    let market_keys: Result<Vec<_>, _> = markets.iter().map(|m| Pubkey::from_str(&m)).collect();
+    let market_keys = market_keys.map_err(|e|anyhow!("Not all market keys valid: {e}"))?;
+    let markets = sdk.client.get_multiple_accounts(&market_keys).await?;
 
-        let market_account_data = sdk.client.get_account_data(&market_pubkey).await?;
-        let (header_bytes, market_bytes) = market_account_data.split_at(size_of::<MarketHeader>());
-        let header: &MarketHeader = bytemuck::try_from_bytes(header_bytes)
-            .map_err(|e| anyhow::anyhow!("Error getting market header. Error: {:?}", e))?;
 
-        let market = load_with_dispatch(&header.market_size_params, market_bytes)
-            .map_err(|e| anyhow::anyhow!("Failed to load market. Error {:?}", e))?
-            .inner;
+    for market in markets {
+        match market {
+            None => {
+                return Err(anyhow!("One or more of the market pubkeys failed to return account data..."));
+            },
+            Some(market) => {
+                let (header_bytes, market_bytes) = market.data.split_at(size_of::<MarketHeader>());
+                let header: &MarketHeader = bytemuck::try_from_bytes(header_bytes)
+                    .map_err(|e| anyhow::anyhow!("Error getting market header. Error: {:?}", e))?;
+                let metadata = MarketMetadata::from_header(header)?;
 
-        let (_, quote_mint_symbol) = get_base_and_quote_symbols(&config, header);
-        let quote_mint_symbol = quote_mint_symbol.unwrap();
-        let quote_mint_symbol = quote_mint_symbol.as_str();
-
-        let amt = market.get_uncollected_fee_amount().as_u64() as f32
-            / 10f32.powi(market_metadata.quote_decimals as i32);
-        match quote_mint_symbol {
-            "USDC" => {
-                total_usdc += amt;
-                total += amt;
-            }
-            "USDT" => {
-                total_usdt += amt;
-                total += usdtprice * amt;
-            }
-            "SOL" => {
-                total_sol += amt;
-                total += solprice * amt;
-            }
-            _ => return Err(anyhow!(
-                "The {market_key} market is using an unsupported quote token: {quote_mint_symbol}."
-            )),
+                let market = load_with_dispatch(&header.market_size_params, market_bytes)
+                    .map_err(|e| anyhow::anyhow!("Failed to load market. Error {:?}", e))?
+                    .inner;
+                
+                let (_, quote_mint_symbol) = get_base_and_quote_symbols(&config, header);
+                let quote_mint_symbol = quote_mint_symbol.unwrap();
+                let quote_mint_symbol = quote_mint_symbol.as_str();
+        
+                let amt = market.get_uncollected_fee_amount().as_u64() as f32
+                    / 10f32.powi(metadata.quote_decimals as i32);
+                match quote_mint_symbol {
+                    "USDC" => {
+                        total_usdc += amt;
+                        total += amt;
+                    }
+                    "USDT" => {
+                        total_usdt += amt;
+                        total += usdtprice * amt;
+                    }
+                    "SOL" => {
+                        total_sol += amt;
+                        total += solprice * amt;
+                    }
+                    _ => return Err(anyhow!(
+                        "One or more markets is using an unsupported quote token: {quote_mint_symbol}."
+                    )),
+                }
+            },
         }
     }
     println!("USDC: {total_usdc}");
